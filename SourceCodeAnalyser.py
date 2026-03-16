@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
-#  Burp Suite Extension -- Source Code Security Analyzer  (80+ rules)
+#  Burp Suite Extension -- Source Code Security Analyzer
 #  Author  : Tejas N Pingulkar
-#  Language: Python 2.7 (Jython) -- compatible with Burp Suite
 #  Install : Extender -> Extensions -> Add -> Python -> select this file
 # ============================================================
 
@@ -25,6 +24,7 @@ from javax.swing.event import ListSelectionListener
 from java.util import ArrayList
 import re
 import json
+import traceback
 
 # -- ANSI-free severity colours ------------------------------
 SEVERITY_COLOR = {
@@ -1786,24 +1786,30 @@ def _build_line_index(body):
     Pre-compute start offsets of every line. O(n) once.
     All subsequent line-number lookups become O(log n).
     """
-    starts = [0]
-    idx = body.find('\n')
-    while idx != -1:
-        starts.append(idx + 1)
-        idx = body.find('\n', idx + 1)
-    return starts
+    try:
+        starts = [0]
+        idx = body.find('\n')
+        while idx != -1:
+            starts.append(idx + 1)
+            idx = body.find('\n', idx + 1)
+        return starts
+    except Exception:
+        return [0]
 
 
 def _line_number_fast(line_starts, offset):
     """Binary-search line_starts to get the 1-based line number for offset."""
-    lo, hi = 0, len(line_starts) - 1
-    while lo < hi:
-        mid = (lo + hi + 1) // 2
-        if line_starts[mid] <= offset:
-            lo = mid
-        else:
-            hi = mid - 1
-    return lo + 1
+    try:
+        lo, hi = 0, len(line_starts) - 1
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if line_starts[mid] <= offset:
+                lo = mid
+            else:
+                hi = mid - 1
+        return lo + 1
+    except Exception:
+        return 1
 
 
 def _context_block_fast(lines, line_no, matched_text, context_lines=2):
@@ -1811,21 +1817,24 @@ def _context_block_fast(lines, line_no, matched_text, context_lines=2):
     Render a linter-style context block from the pre-split lines list.
     Does NOT re-split the body -- called once per match using shared list.
     """
-    idx   = line_no - 1
-    start = max(0, idx - context_lines)
-    end   = min(len(lines), idx + context_lines + 1)
-    out   = []
-    for i in range(start, end):
-        prefix = "{:>5} | ".format(i + 1)
-        text   = lines[i]
-        if len(text) > 200:          # truncate minified lines
-            text = text[:197] + "..."
-        out.append(prefix + text)
-        if i == idx:
-            col = lines[i].find(matched_text[:40])
-            col = max(col, 0)
-            out.append(" " * (len(prefix) + col) + "^" * min(len(matched_text), 50))
-    return "\n".join(out)
+    try:
+        idx   = line_no - 1
+        start = max(0, idx - context_lines)
+        end   = min(len(lines), idx + context_lines + 1)
+        out   = []
+        for i in range(start, end):
+            prefix = "{:>5} | ".format(i + 1)
+            text   = lines[i]
+            if len(text) > 200:          # truncate minified lines
+                text = text[:197] + "..."
+            out.append(prefix + text)
+            if i == idx:
+                col = lines[i].find(matched_text[:40])
+                col = max(col, 0)
+                out.append(" " * (len(prefix) + col) + "^" * min(len(matched_text), 50))
+        return "\n".join(out)
+    except Exception:
+        return "  (context unavailable)"
 
 
 def _all_matches_fast(pattern, body, line_starts, lines):
@@ -1851,7 +1860,7 @@ def _all_matches_fast(pattern, body, line_starts, lines):
                 "context_str":  _context_block_fast(lines, line_no, matched_text),
             })
     except Exception:
-        pass
+        pass   # bad regex pattern -- skip silently
     return results
 
 
@@ -1882,18 +1891,21 @@ class SourceCodeIssue(IScanIssue):
     def getHttpService(self):   return self._httpService
 
     def getIssueDetail(self):
-        parts = ["<b>Found {} occurrence(s)</b><br><br>".format(len(self._occurrences))]
-        for i, occ in enumerate(self._occurrences[:5], 1):   # cap at 5 in Burp pane
-            parts.append(
-                "<b>Occurrence {}  --  Line {}</b><br>"
-                "<b>Matched code:</b> <code>{}</code><br>"
-                "<pre>{}</pre><hr>".format(
-                    i, occ["line_no"],
-                    occ["matched_text"].replace("<", "&lt;").replace(">", "&gt;"),
-                    occ["context_str"].replace("<", "&lt;").replace(">", "&gt;"),
+        try:
+            parts = ["<b>Found {} occurrence(s)</b><br><br>".format(len(self._occurrences))]
+            for i, occ in enumerate(self._occurrences[:5], 1):   # cap at 5 in Burp pane
+                parts.append(
+                    "<b>Occurrence {}  --  Line {}</b><br>"
+                    "<b>Matched code:</b> <code>{}</code><br>"
+                    "<pre>{}</pre><hr>".format(
+                        i, occ["line_no"],
+                        occ["matched_text"].replace("<", "&lt;").replace(">", "&gt;"),
+                        occ["context_str"].replace("<", "&lt;").replace(">", "&gt;"),
+                    )
                 )
-            )
-        return "".join(parts)
+            return "".join(parts)
+        except Exception:
+            return "<b>Error rendering issue detail.</b>"
 
     def getRemediationDetail(self): return None
 
@@ -1914,29 +1926,32 @@ class IssueTableModel(DefaultTableModel):
 
     def add_finding(self, finding):
         """finding = dict with all enriched data."""
-        row_num = self.getRowCount() + 1
-        # "Line(s)" column -- show first line, +N more if multiple
-        occs = finding["occurrences"]
-        if len(occs) == 1:
-            lines_cell = "L{}".format(occs[0]["line_no"])
-        else:
-            lines_cell = "L{} (+{})".format(occs[0]["line_no"], len(occs) - 1)
-        # "What's Wrong" column -- the exact bad token, trimmed
-        bad_code = occs[0]["matched_text"].strip()
-        if len(bad_code) > 60:
-            bad_code = bad_code[:57] + "..."
+        try:
+            row_num = self.getRowCount() + 1
+            # "Line(s)" column -- show first line, +N more if multiple
+            occs = finding["occurrences"]
+            if len(occs) == 1:
+                lines_cell = "L{}".format(occs[0]["line_no"])
+            else:
+                lines_cell = "L{} (+{})".format(occs[0]["line_no"], len(occs) - 1)
+            # "What's Wrong" column -- the exact bad token, trimmed
+            bad_code = occs[0]["matched_text"].strip()
+            if len(bad_code) > 60:
+                bad_code = bad_code[:57] + "..."
 
-        self.addRow([
-            row_num,
-            finding["severity"],
-            finding["confidence"],
-            finding["name"],
-            lines_cell,
-            bad_code,
-            finding["url"],
-        ])
-        self._issues.append(finding)
-        return row_num - 1
+            self.addRow([
+                row_num,
+                finding["severity"],
+                finding["confidence"],
+                finding["name"],
+                lines_cell,
+                bad_code,
+                finding["url"],
+            ])
+            self._issues.append(finding)
+            return row_num - 1
+        except Exception:
+            pass   # never crash the EDT on a bad finding dict
 
     def get_finding(self, row):
         if 0 <= row < len(self._issues):
@@ -1998,7 +2013,7 @@ class SourceCodeAnalyzerTab(JPanel):
         header.setBackground(Color(22, 22, 35))
         header.setBorder(BorderFactory.createEmptyBorder(10, 16, 10, 16))
 
-        title = JLabel("  \u26a0  Source Code Analyzer")
+        title = JLabel("Source Code Analyzer")
         title.setFont(Font("Consolas", Font.BOLD, 17))
         title.setForeground(Color(0, 210, 150))
         header.add(title, BorderLayout.WEST)
@@ -2103,12 +2118,15 @@ class SourceCodeAnalyzerTab(JPanel):
         tab = self
         class _Adder(Runnable):
             def run(self):
-                sev = finding["severity"]
-                tab._counts[sev] = tab._counts.get(sev, 0) + 1
-                tab._total += 1
-                tab._all_data.append(finding)
-                tab._model.add_finding(finding)
-                tab._update_stats()
+                try:
+                    sev = finding["severity"]
+                    tab._counts[sev] = tab._counts.get(sev, 0) + 1
+                    tab._total += 1
+                    tab._all_data.append(finding)
+                    tab._model.add_finding(finding)
+                    tab._update_stats()
+                except Exception:
+                    pass   # never crash the EDT
         SwingUtilities.invokeLater(_Adder())
 
     def show_detail(self, row_idx):
@@ -2137,123 +2155,162 @@ class SourceCodeAnalyzerTab(JPanel):
         info_area   = self._info_area
 
         def _build_and_set():
-            # ---- code pane ----
-            shown = occs[:MAX_DETAIL_OCCS]
-            code_lines = [
-                "=== {} -- {} occurrence{} {} ===".format(
-                    name, total, "s" if total != 1 else "",
-                    "(showing {})".format(len(shown)) if total > MAX_DETAIL_OCCS else ""),
-                "URL : {}".format(url),
-                "",
-            ]
-            for idx, occ in enumerate(shown, 1):
-                code_lines.append(
-                    "-- Occurrence {}/{} -- Line {} ----".format(
-                        idx, total, occ.get("line_no", "?")))
-                code_lines.append("")
-                code_lines.append("  Matched : {}".format(
-                    occ.get("matched_text", "")[:200]))
-                code_lines.append("")
-                code_lines.append("  Context :")
-                code_lines.append(occ.get("context_str", ""))
-                code_lines.append("")
-            if total > MAX_DETAIL_OCCS:
-                code_lines.append(
-                    "  ... {} more occurrence(s) not shown.".format(
-                        total - MAX_DETAIL_OCCS))
-            code_text = "\n".join(code_lines)
+            try:
+                # ---- code pane ----
+                shown = occs[:MAX_DETAIL_OCCS]
+                code_lines = [
+                    "=== {} -- {} occurrence{} {} ===".format(
+                        name, total, "s" if total != 1 else "",
+                        "(showing {})".format(len(shown)) if total > MAX_DETAIL_OCCS else ""),
+                    "URL : {}".format(url),
+                    "",
+                ]
+                for idx, occ in enumerate(shown, 1):
+                    code_lines.append(
+                        "-- Occurrence {}/{} -- Line {} ----".format(
+                            idx, total, occ.get("line_no", "?")))
+                    code_lines.append("")
+                    code_lines.append("  Matched : {}".format(
+                        occ.get("matched_text", "")[:200]))
+                    code_lines.append("")
+                    code_lines.append("  Context :")
+                    code_lines.append(occ.get("context_str", ""))
+                    code_lines.append("")
+                if total > MAX_DETAIL_OCCS:
+                    code_lines.append(
+                        "  ... {} more occurrence(s) not shown.".format(
+                            total - MAX_DETAIL_OCCS))
+                code_text = "\n".join(code_lines)
 
-            # ---- info pane ----
-            sep_eq   = "=" * 60
-            sep_dash = "-" * 60
-            example_block = ""
-            if bad_ex or good_ex:
-                example_block = (
-                    "\n\n--- BAD (what was found) ---\n{}"
-                    "\n\n--- GOOD (what to use instead) ---\n{}"
-                ).format(bad_ex, good_ex)
+                # ---- info pane ----
+                sep_eq   = "=" * 60
+                sep_dash = "-" * 60
+                example_block = ""
+                if bad_ex or good_ex:
+                    example_block = (
+                        "\n\n--- BAD (what was found) ---\n{}"
+                        "\n\n--- GOOD (what to use instead) ---\n{}"
+                    ).format(bad_ex, good_ex)
 
-            info_text = (
-                "ISSUE\n{sep_eq}\n{name}\n\n"
-                "SEVERITY   : {severity}\n"
-                "CONFIDENCE : {confidence}\n"
-                "OCCURRENCES: {total}\n\n"
-                "WHAT IS WRONG\n{sep_dash}\n{description}"
-                "{example_block}\n\n"
-                "HOW TO FIX IT\n{sep_dash}\n{remediation}\n\n"
-                "REFERENCES\n{sep_dash}\n{refs}"
-            ).format(
-                sep_eq=sep_eq, sep_dash=sep_dash,
-                name=name, severity=severity, confidence=confidence,
-                total=total, description=description,
-                example_block=example_block, remediation=remediation,
-                refs="\n".join(refs),
-            )
+                info_text = (
+                    "ISSUE\n{sep_eq}\n{name}\n\n"
+                    "SEVERITY   : {severity}\n"
+                    "CONFIDENCE : {confidence}\n"
+                    "OCCURRENCES: {total}\n\n"
+                    "WHAT IS WRONG\n{sep_dash}\n{description}"
+                    "{example_block}\n\n"
+                    "HOW TO FIX IT\n{sep_dash}\n{remediation}\n\n"
+                    "REFERENCES\n{sep_dash}\n{refs}"
+                ).format(
+                    sep_eq=sep_eq, sep_dash=sep_dash,
+                    name=name, severity=severity, confidence=confidence,
+                    total=total, description=description,
+                    example_block=example_block, remediation=remediation,
+                    refs="\n".join(refs),
+                )
 
-            # Post back to EDT
-            ct = code_text
-            it = info_text
-            class _Updater(Runnable):
-                def run(self):
-                    code_area.setText(ct)
-                    code_area.setCaretPosition(0)
-                    info_area.setText(it)
-                    info_area.setCaretPosition(0)
-            SwingUtilities.invokeLater(_Updater())
+                # Post back to EDT
+                ct = code_text
+                it = info_text
+                class _Updater(Runnable):
+                    def run(self):
+                        try:
+                            code_area.setText(ct)
+                            code_area.setCaretPosition(0)
+                            info_area.setText(it)
+                            info_area.setCaretPosition(0)
+                        except Exception:
+                            pass   # never crash the EDT
+                SwingUtilities.invokeLater(_Updater())
+
+            except Exception:
+                err_msg = traceback.format_exc()
+                err_ct  = err_msg
+                err_it  = "Error rendering detail:\n" + err_msg
+                class _ErrUpdater(Runnable):
+                    def run(self):
+                        try:
+                            code_area.setText(err_ct)
+                            code_area.setCaretPosition(0)
+                            info_area.setText(err_it)
+                            info_area.setCaretPosition(0)
+                        except Exception:
+                            pass
+                SwingUtilities.invokeLater(_ErrUpdater())
 
         t = threading.Thread(target=_build_and_set)
         t.setDaemon(True)
         t.start()
 
     def apply_filter(self):
-        sev   = str(self._sev_filter.getSelectedItem())
-        query = str(self._search_field.getText()).lower().strip()
-        self._model.clear()
-        for f in self._all_data:
-            if sev != "All" and f["severity"] != sev:
-                continue
-            if query:
-                haystack = (f["name"] + f["url"] + f["description"]).lower()
-                if query not in haystack:
+        try:
+            sev   = str(self._sev_filter.getSelectedItem())
+            query = str(self._search_field.getText()).lower().strip()
+            self._model.clear()
+            for f in self._all_data:
+                if sev != "All" and f["severity"] != sev:
                     continue
-            self._model.add_finding(f)
+                if query:
+                    haystack = (f["name"] + f["url"] + f["description"]).lower()
+                    if query not in haystack:
+                        continue
+                self._model.add_finding(f)
+        except Exception:
+            pass   # filter errors must not clear findings
 
     def clear_all(self):
-        self._all_data = []
-        self._model.clear()
-        self._total  = 0
-        self._counts = {"High": 0, "Medium": 0, "Low": 0, "Informational": 0}
-        self._code_area.setText("")
-        self._info_area.setText("")
-        self._update_stats()
+        try:
+            self._all_data = []
+            self._model.clear()
+            self._total  = 0
+            self._counts = {"High": 0, "Medium": 0, "Low": 0, "Informational": 0}
+            self._code_area.setText("")
+            self._info_area.setText("")
+            self._update_stats()
+        except Exception:
+            pass
 
     def _update_stats(self):
-        parts = []
-        for sev in ("High", "Medium", "Low", "Informational"):
-            n = self._counts.get(sev, 0)
-            if n:
-                parts.append("{}:{}".format(sev[0], n))
-        self._stat_lbl.setText(
-            "Findings: {}   |   {}  ".format(self._total, "  ".join(parts)))
+        try:
+            parts = []
+            for sev in ("High", "Medium", "Low", "Informational"):
+                n = self._counts.get(sev, 0)
+                if n:
+                    parts.append("{}:{}".format(sev[0], n))
+            self._stat_lbl.setText(
+                "Findings: {}   |   {}  ".format(self._total, "  ".join(parts)))
+        except Exception:
+            pass
 
 
 
 # -- Listeners -----------------------------------------------
 class FilterListener(ActionListener):
     def __init__(self, tab): self._tab = tab
-    def actionPerformed(self, e): self._tab.apply_filter()
+    def actionPerformed(self, e):
+        try:
+            self._tab.apply_filter()
+        except Exception:
+            pass
 
 class ClearListener(ActionListener):
     def __init__(self, tab): self._tab = tab
-    def actionPerformed(self, e): self._tab.clear_all()
+    def actionPerformed(self, e):
+        try:
+            self._tab.clear_all()
+        except Exception:
+            pass
 
 class TableSelectionListener(ListSelectionListener):
     def __init__(self, tab): self._tab = tab
     def valueChanged(self, e):
-        if not e.getValueIsAdjusting():
-            row = self._tab._table.getSelectedRow()
-            if row >= 0:
-                self._tab.show_detail(row)
+        try:
+            if not e.getValueIsAdjusting():
+                row = self._tab._table.getSelectedRow()
+                if row >= 0:
+                    self._tab.show_detail(row)
+        except Exception:
+            pass   # never crash the EDT on selection events
 
 
 # ------------------------------------------------------------
@@ -2387,90 +2444,111 @@ class SourceCodeScannerCheck(IScannerCheck):
         self._seen      = set()   # (url, rule_name) -- one Burp issue per pair
 
     def doPassiveScan(self, baseRequestResponse):
-        response  = self._helpers.analyzeResponse(baseRequestResponse.getResponse())
-        type_hint = _get_type_hint(response)
-
-        # ---- Decode body with size cap to keep regex fast ----
-        raw = baseRequestResponse.getResponse()
-        offset = response.getBodyOffset()
-        body_bytes = raw[offset : offset + MAX_BODY_BYTES]
         try:
-            body = body_bytes.tostring().decode("utf-8", errors="replace")
+            response  = self._helpers.analyzeResponse(baseRequestResponse.getResponse())
+            type_hint = _get_type_hint(response)
+
+            # ---- Decode body with size cap to keep regex fast ----
+            raw = baseRequestResponse.getResponse()
+            offset = response.getBodyOffset()
+            body_bytes = raw[offset : offset + MAX_BODY_BYTES]
+            try:
+                body = body_bytes.tostring().decode("utf-8", errors="replace")
+            except Exception:
+                body = str(body_bytes)
+
+            if not body.strip():
+                return None
+
+            url = str(self._helpers.analyzeRequest(baseRequestResponse).getUrl())
+
+            # ---- Build line index ONCE for this body ----
+            line_starts = _build_line_index(body)
+            lines       = body.splitlines()
+
+            burp_issues = []
+
+            for rule in RULES:
+                # Per-rule isolation: one bad rule never stops the rest
+                try:
+                    if type_hint not in rule["applies_to"]:
+                        continue
+
+                    key = (url, rule["name"])
+                    if key in self._seen:
+                        continue
+
+                    # Use fast helpers -- index built once above
+                    matches = _all_matches_fast(rule["pattern"], body, line_starts, lines)
+                    if not matches:
+                        continue
+
+                    self._seen.add(key)
+
+                    # context_str already built inside _all_matches_fast
+                    occurrences = matches   # already the right shape
+
+                    # Look up optional extras
+                    ex   = RULE_EXAMPLES.get(rule["name"], {})
+                    refs = RULE_REFS.get(rule["name"], [])
+
+                    finding = {
+                        "name":        rule["name"],
+                        "severity":    rule["severity"],
+                        "confidence":  rule["confidence"],
+                        "description": rule["description"],
+                        "remediation": rule["remediation"],
+                        "url":         url,
+                        "occurrences": occurrences,
+                        "bad_example": ex.get("bad",  ""),
+                        "good_example":ex.get("good", ""),
+                        "refs":        refs if refs else ["See OWASP Top 10 / CWE for details"],
+                    }
+
+                    # add_finding is thread-safe (posts to EDT via invokeLater)
+                    self._tab.add_finding(finding)
+
+                    # Build the Burp Scanner issue
+                    burp_issues.append(SourceCodeIssue(
+                        baseRequestResponse.getHttpService(),
+                        self._helpers.analyzeRequest(baseRequestResponse).getUrl(),
+                        [baseRequestResponse],
+                        rule["name"],
+                        rule["severity"],
+                        rule["confidence"],
+                        rule["description"],
+                        rule["remediation"],
+                        occurrences,
+                    ))
+
+                except Exception:
+                    # Log the rule name so the developer knows which rule failed
+                    self._callbacks.printError(
+                        "[SCA] Rule '{}' error:\n{}".format(
+                            rule.get("name", "unknown"), traceback.format_exc()
+                        )
+                    )
+                    continue   # skip this rule, keep scanning with the rest
+
+            return burp_issues if burp_issues else None
+
         except Exception:
-            body = str(body_bytes)
-
-        if not body.strip():
+            self._callbacks.printError(
+                "[SCA] doPassiveScan fatal error:\n" + traceback.format_exc()
+            )
             return None
-
-        url = str(self._helpers.analyzeRequest(baseRequestResponse).getUrl())
-
-        # ---- Build line index ONCE for this body ----
-        line_starts = _build_line_index(body)
-        lines       = body.splitlines()
-
-        burp_issues = []
-
-        for rule in RULES:
-            if type_hint not in rule["applies_to"]:
-                continue
-
-            key = (url, rule["name"])
-            if key in self._seen:
-                continue
-
-            # Use fast helpers -- index built once above
-            matches = _all_matches_fast(rule["pattern"], body, line_starts, lines)
-            if not matches:
-                continue
-
-            self._seen.add(key)
-
-            # context_str already built inside _all_matches_fast
-            occurrences = matches   # already the right shape
-
-            # Look up optional extras
-            ex   = RULE_EXAMPLES.get(rule["name"], {})
-            refs = RULE_REFS.get(rule["name"], [])
-
-            finding = {
-                "name":        rule["name"],
-                "severity":    rule["severity"],
-                "confidence":  rule["confidence"],
-                "description": rule["description"],
-                "remediation": rule["remediation"],
-                "url":         url,
-                "occurrences": occurrences,
-                "bad_example": ex.get("bad",  ""),
-                "good_example":ex.get("good", ""),
-                "refs":        refs if refs else ["See OWASP Top 10 / CWE for details"],
-            }
-
-            # add_finding is thread-safe (posts to EDT via invokeLater)
-            self._tab.add_finding(finding)
-
-            # Build the Burp Scanner issue
-            burp_issues.append(SourceCodeIssue(
-                baseRequestResponse.getHttpService(),
-                self._helpers.analyzeRequest(baseRequestResponse).getUrl(),
-                [baseRequestResponse],
-                rule["name"],
-                rule["severity"],
-                rule["confidence"],
-                rule["description"],
-                rule["remediation"],
-                occurrences,
-            ))
-
-        return burp_issues if burp_issues else None
 
     def doActiveScan(self, baseRequestResponse, insertionPoint):
         return None
 
     def consolidateDuplicateIssues(self, existing, newIssue):
-        if existing.getIssueName() == newIssue.getIssueName() \
-                and str(existing.getUrl()) == str(newIssue.getUrl()):
-            return -1
-        return 0
+        try:
+            if existing.getIssueName() == newIssue.getIssueName() \
+                    and str(existing.getUrl()) == str(newIssue.getUrl()):
+                return -1
+            return 0
+        except Exception:
+            return 0   # safe default: treat as non-duplicate
 
 
 # ------------------------------------------------------------
@@ -2478,22 +2556,30 @@ class SourceCodeScannerCheck(IScannerCheck):
 # ------------------------------------------------------------
 class BurpExtender(IBurpExtender, ITab):
     def registerExtenderCallbacks(self, callbacks):
-        self._callbacks = callbacks
-        self._helpers   = callbacks.getHelpers()
+        try:
+            self._callbacks = callbacks
+            self._helpers   = callbacks.getHelpers()
 
-        callbacks.setExtensionName("Source Code Analyzer")
+            callbacks.setExtensionName("Source Code Analyser")
 
-        self._tab = SourceCodeAnalyzerTab(callbacks)
+            self._tab = SourceCodeAnalyzerTab(callbacks)
 
-        self._scanner = SourceCodeScannerCheck(callbacks, self._helpers, self._tab)
-        callbacks.registerScannerCheck(self._scanner)
+            self._scanner = SourceCodeScannerCheck(callbacks, self._helpers, self._tab)
+            callbacks.registerScannerCheck(self._scanner)
 
-        callbacks.addSuiteTab(self)
+            callbacks.addSuiteTab(self)
 
-        callbacks.printOutput(
-            "[SCA] Source Code Analyzer loaded -- {} rules active.\n"
-            "Browse any page to start scanning.".format(len(RULES))
-        )
+            callbacks.printOutput(
+                "[SCA] Source Code Analyser loaded -- {} rules active.\n"
+                "Browse any page to start scanning.".format(len(RULES))
+            )
+        except Exception:
+            try:
+                callbacks.printError(
+                    "[SCA] Failed to load extension:\n" + traceback.format_exc()
+                )
+            except Exception:
+                pass   # if even printError fails, nothing more we can do
 
     def getTabCaption(self):  return "Source Code Analyzer"
     def getUiComponent(self): return self._tab
