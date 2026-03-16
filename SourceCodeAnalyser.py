@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 #  Burp Suite Extension -- Source Code Security Analyzer  (80+ rules)
-#  Author  : Generated via Claude
+#  Author  : Tejas N Pingulkar
 #  Language: Python 2.7 (Jython) -- compatible with Burp Suite
 #  Install : Extender -> Extensions -> Add -> Python -> select this file
 # ============================================================
