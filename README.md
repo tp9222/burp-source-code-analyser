@@ -1,4 +1,4 @@
-# Source Code Analyser — Burp Suite Extension
+# Source Code Scanner — Burp Suite Extension
 
 A passive Burp Suite extension that automatically scans HTML, JavaScript, JSON,
 and text responses for **75 security vulnerabilities and weak coding practices**
@@ -43,16 +43,16 @@ guidance, and the mapped CWE / OWASP Top 10 reference.
 
 1. Go to **Extender → Extensions** → click **Add**
 2. Set **Extension type** to `Python`
-3. Click **Select file...** and choose `SourceCodeAnalyser.py`
+3. Click **Select file...** and choose `SourceCodeScanner.py`
 4. Click **Next**
 
 You should see in the Output pane:
 ```
-[SCA] Source Code Analyser loaded — 75 rules active.
+[SCA] Source Code Scanner loaded — 75 rules active.
 Browse any page to start scanning.
 ```
 
-A **"Source Code Analyser"** tab will appear in the main Burp toolbar.
+A **"Source Code Scanner"** tab will appear in the main Burp toolbar.
 
 ### Step 4 — Configure Your Browser Proxy
 
@@ -78,7 +78,7 @@ proxy to that address.
 
 1. Set **Proxy → Intercept** to **Intercept is off**
 2. Browse the target application normally
-3. Open the **Source Code Analyser** tab — findings appear in real time
+3. Open the **Source Code Scanner** tab — findings appear in real time
 
 ### Quick Smoke Test
 
